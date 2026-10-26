@@ -25,6 +25,12 @@ The current UI intentionally keeps the demo fallback usable when those variables
 - Reports visible to moderators.
 - Storage upload paths scoped to the authenticated user.
 
+## Authentication
+
+The app now opens with a login page. When Supabase is configured, sign-in and account creation use Supabase Auth and sessions persist across reloads. Enable email/password authentication in the Supabase dashboard, then set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env.local`.
+
+Without Supabase credentials, the app runs in demo mode: any email and password with at least six characters can create a browser-local demo session. This fallback is for local exploration only and is not production authentication.
+
 ## Main flows
 
 - Search, category browsing, condition/type filters, and saved items.

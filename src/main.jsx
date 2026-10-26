@@ -7,6 +7,7 @@ import {
   PackageOpen, Plus, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles,
   Tag, X, Zap
 } from 'lucide-react'
+import { isSupabaseConfigured, supabase } from './lib/supabase'
 import './styles.css'
 
 const seedListings = [
@@ -20,7 +21,98 @@ const seedListings = [
 
 const categories = ['All items', 'Books', 'Electronics', 'Room essentials', 'Academic supplies', 'Sports & hobbies']
 
-function App() {
+function AuthGate() {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+    const loadSession = async () => {
+      if (isSupabaseConfigured) {
+        const { data } = await supabase.auth.getSession()
+        if (active) setUser(data.session?.user ?? null)
+      } else {
+        const demoUser = sessionStorage.getItem('campus-exchange-demo-user')
+        if (active && demoUser) setUser({ email: demoUser })
+      }
+      if (active) setLoading(false)
+    }
+    loadSession()
+
+    if (!isSupabaseConfigured) return () => { active = false }
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setUser(session?.user ?? null)
+    })
+    return () => {
+      active = false
+      subscription.subscription.unsubscribe()
+    }
+  }, [])
+
+  if (loading) return <div className="auth-loading">Loading your campus account...</div>
+  return user
+    ? <App user={user} onSignOut={() => { setUser(null); sessionStorage.removeItem('campus-exchange-demo-user') }} />
+    : <LoginPage onAuthenticated={setUser} />
+}
+
+function LoginPage({ onAuthenticated }) {
+  const [mode, setMode] = useState('sign-in')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setPending(true)
+    setError('')
+    setNotice('')
+    try {
+      if (!isSupabaseConfigured) {
+        if (password.length < 6) throw new Error('Use a password with at least 6 characters.')
+        sessionStorage.setItem('campus-exchange-demo-user', email.trim().toLowerCase())
+        onAuthenticated({ email: email.trim().toLowerCase() })
+        return
+      }
+      const result = mode === 'sign-in'
+        ? await supabase.auth.signInWithPassword({ email, password })
+        : await supabase.auth.signUp({ email, password })
+      if (result.error) throw result.error
+      if (mode === 'sign-up' && !result.data.session) {
+        setNotice('Account created. Check your email to confirm it, then sign in.')
+      } else {
+        onAuthenticated(result.data.user)
+      }
+    } catch (authError) {
+      setError(authError.message || 'We could not authenticate you. Please try again.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return <div className="auth-page">
+    <div className="auth-panel">
+      <div className="auth-brand"><span className="brand-mark">CX</span><span>Campus<span className="brand-accent">Exchange</span></span></div>
+      <div className="eyebrow"><span className="status-light" /> CAMPUS NETWORK / SECURE ACCESS</div>
+      <h1>{mode === 'sign-in' ? 'Welcome back.' : 'Join the exchange.'}</h1>
+      <p className="auth-intro">{mode === 'sign-in' ? 'Sign in to keep your campus marketplace close.' : 'Create your account and start trading with fellow students.'}</p>
+      <form className="auth-form" onSubmit={submit}>
+        <label>Email address<input type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@campus.edu" required autoComplete="email" /></label>
+        <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="At least 6 characters" required minLength="6" autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} /></label>
+        {error && <p className="auth-message auth-error" role="alert">{error}</p>}
+        {notice && <p className="auth-message auth-notice" role="status">{notice}</p>}
+        <button className="primary-btn auth-submit" type="submit" disabled={pending}>{pending ? 'Connecting...' : mode === 'sign-in' ? 'Sign in' : 'Create account'} <ArrowUpRight size={16}/></button>
+      </form>
+      <button className="auth-switch" onClick={() => { setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in'); setError(''); setNotice('') }}>
+        {mode === 'sign-in' ? 'New here? Create an account' : 'Already have an account? Sign in'}
+      </button>
+      {!isSupabaseConfigured && <p className="auth-demo-note">Demo mode is active. Add Supabase credentials to enable production authentication.</p>}
+    </div>
+  </div>
+}
+
+function App({ user, onSignOut }) {
   const [listings, setListings] = useState(() => {
     try { return JSON.parse(localStorage.getItem('campus-exchange-listings')) || seedListings } catch { return seedListings }
   })
@@ -69,7 +161,7 @@ function App() {
       </nav>
       <div className="top-actions">
         <button className="icon-btn notification" aria-label="Notifications"><Bell size={18}/><span /></button>
-        <button className="profile-chip" onClick={() => setModal('profile')}><span className="avatar avatar-small">VK</span><span className="profile-name">Vikash Kumar</span><ChevronDown size={14}/></button>
+        <button className="profile-chip" onClick={() => setModal('profile')}><span className="avatar avatar-small">{getInitials(user?.email)}</span><span className="profile-name">{user?.email || 'Your account'}</span><ChevronDown size={14}/></button>
         <button className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu"><Menu size={21}/></button>
       </div>
     </header>
@@ -100,15 +192,19 @@ function App() {
     {selected && <ListingDetail item={selected} saved={saved.includes(selected.id)} onSave={() => toggleSaved(selected.id)} onClose={() => setSelected(null)} onMessage={() => setModal('messages')} />}
     {modal === 'create' && <CreateModal onClose={() => setModal(null)} onSubmit={createListing}/>}
     {modal === 'messages' && <MessageModal onClose={() => setModal(null)} onToast={setToast}/>}
-    {modal === 'profile' && <ProfileModal onClose={() => setModal(null)} onToast={setToast}/>}
+    {modal === 'profile' && <ProfileModal user={user} onClose={() => setModal(null)} onToast={setToast} onSignOut={onSignOut}/>}
     {toast && <div className="toast"><Check size={17}/>{toast}</div>}
   </div>
+}
+
+function getInitials(email = '') {
+  return email.split('@')[0].split(/[._-]/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase() || 'U'
 }
 
 function Overlay({ children, onClose, wide = false }) { return <div className="overlay" onMouseDown={event => event.target === event.currentTarget && onClose()}><div className={`dialog ${wide ? 'dialog-wide' : ''}`}>{children}</div></div> }
 function ListingDetail({ item, saved, onSave, onClose, onMessage }) { return <Overlay onClose={onClose} wide><div className="dialog-image"><img src={item.image} alt={item.title}/><button className="close-btn" onClick={onClose}><X size={19}/></button></div><div className="detail-content"><div className="eyebrow">{item.type.toUpperCase()} / {item.category.toUpperCase()}</div><h2>{item.title}</h2><div className="detail-price">₹{item.price.toLocaleString('en-IN')} <span>· {item.condition}</span></div><p>{item.description}</p><div className="detail-seller"><span className="avatar avatar-large">{item.initials}</span><div><strong>{item.seller}</strong><span><MapPin size={13}/> {item.campus} · member since 2023</span></div><button className="text-link">View profile <ArrowUpRight size={14}/></button></div><div className="dialog-actions"><button className="secondary-btn" onClick={onSave}><Heart size={16} fill={saved ? 'currentColor' : 'none'}/> {saved ? 'Saved' : 'Save item'}</button><button className="primary-btn" onClick={onMessage}><MessageSquare size={16}/> Message seller</button></div><div className="report-link">Something not right? <button>Report this listing</button></div></div></Overlay> }
 function CreateModal({ onClose, onSubmit }) { return <Overlay onClose={onClose}><div className="modal-head"><div><div className="eyebrow">03 / NEW LISTING</div><h2>Put it back in play.</h2></div><button className="close-btn plain" onClick={onClose}><X size={19}/></button></div><form className="listing-form" onSubmit={onSubmit}><label>What are you listing?<input name="title" required placeholder="e.g. Data Structures textbook" /></label><div className="form-grid"><label>Category<select name="category"><option>Books</option><option>Electronics</option><option>Room essentials</option><option>Academic supplies</option><option>Sports & hobbies</option></select></label><label>Price (₹)<input name="price" required type="number" min="0" placeholder="0" /></label></div><div className="form-grid"><label>Condition<select name="condition"><option>Like new</option><option>Good</option></select></label><label>Listing type<select name="type"><option>Sale</option><option>Exchange</option></select></label></div><label>Description <textarea name="description" rows="3" placeholder="Add a little context for fellow students..." /></label><button className="upload-box" type="button"><ImagePlus size={21}/><span><strong>Add photos</strong><small>JPG or PNG · up to 5MB</small></span></button><button className="primary-btn submit-btn" type="submit">Publish listing <ArrowUpRight size={16}/></button></form></Overlay> }
 function MessageModal({ onClose, onToast }) { const [sent, setSent] = useState(false); return <Overlay onClose={onClose}><div className="modal-head"><div><div className="eyebrow">04 / MESSAGES</div><h2>Your conversations</h2></div><button className="close-btn plain" onClick={onClose}><X size={19}/></button></div>{sent ? <div className="sent-state"><Check size={26}/><h3>Message sent.</h3><p>You'll see replies from sellers here.</p><button className="secondary-btn" onClick={onClose}>Close</button></div> : <><div className="conversation"><span className="avatar">NK</span><div><strong>Nisha Kapoor</strong><p>Is the calculator still available?</p><small>Yesterday · Casio fx-991EX</small></div><span className="unread" /></div><div className="message-compose"><input placeholder="Write a message..." /><button className="primary-btn" onClick={() => { setSent(true); onToast('Message sent to Nisha') }}><Send size={15}/></button></div></>}</Overlay> }
-function ProfileModal({ onClose, onToast }) { return <Overlay onClose={onClose}><div className="modal-head"><div><div className="eyebrow">05 / ACCOUNT</div><h2>Your profile</h2></div><button className="close-btn plain" onClick={onClose}><X size={19}/></button></div><div className="account-card"><span className="avatar avatar-large">VK</span><div><h3>Vikash Kumar</h3><p>North Campus · Student</p><span className="verified"><ShieldCheck size={14}/> Verified campus account</span></div></div><div className="account-links"><button onClick={() => onToast('Profile settings are ready for your Supabase account')}><CircleUserRound size={17}/> Profile settings <ArrowUpRight size={15}/></button><button onClick={() => onToast('You are signed in securely')}><LogOut size={17}/> Sign out <ArrowUpRight size={15}/></button></div></Overlay> }
+function ProfileModal({ user, onClose, onToast, onSignOut }) { return <Overlay onClose={onClose}><div className="modal-head"><div><div className="eyebrow">05 / ACCOUNT</div><h2>Your profile</h2></div><button className="close-btn plain" onClick={onClose}><X size={19}/></button></div><div className="account-card"><span className="avatar avatar-large">{getInitials(user?.email)}</span><div><h3>{user?.email || 'Your account'}</h3><p>North Campus · Student</p><span className="verified"><ShieldCheck size={14}/> Verified campus account</span></div></div><div className="account-links"><button onClick={() => onToast('Profile settings are ready for your Supabase account')}><CircleUserRound size={17}/> Profile settings <ArrowUpRight size={15}/></button><button onClick={async () => { try { if (isSupabaseConfigured) { const { error } = await supabase.auth.signOut(); if (error) throw error } onSignOut() } catch (error) { onToast(error.message || 'Could not sign out. Please try again.') } }}><LogOut size={17}/> Sign out <ArrowUpRight size={15}/></button></div></Overlay> }
 
-createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>)
+createRoot(document.getElementById('root')).render(<BrowserRouter><AuthGate /></BrowserRouter>)
