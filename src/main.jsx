@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, useNavigate } from 'react-router-dom'
 import {
@@ -10,9 +10,89 @@ import {
 import { isSupabaseConfigured, supabase } from './lib/supabase'
 import './styles.css'
 
+const DEFAULT_FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=800&q=80'
+
+function getProductImageUrl(item) {
+  if (!item) return DEFAULT_FALLBACK_IMAGE
+  const rawUrl = typeof item === 'string'
+    ? item
+    : item.image ||
+    item.image_url ||
+    item.imageUrl ||
+    item.photo ||
+    item.photo_url ||
+    item.img_url ||
+    (Array.isArray(item.images) && item.images.length > 0 ? item.images[0] : null)
+
+  if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    return DEFAULT_FALLBACK_IMAGE
+  }
+
+  const trimmed = rawUrl.trim()
+
+  if (/^(https?:\/\/|data:image\/|blob:)/i.test(trimmed)) {
+    return trimmed
+  }
+
+  if (supabase) {
+    const cleanPath = trimmed.replace(/^\/+/, '')
+    const filePath = cleanPath.startsWith('listings/') ? cleanPath.replace(/^listings\//, '') : cleanPath
+    const { data } = supabase.storage.from('listings').getPublicUrl(filePath)
+    if (data?.publicUrl) return data.publicUrl
+  }
+
+  return trimmed
+}
+
+const handleImageError = (event) => {
+  const target = event.currentTarget
+  if (target.src !== DEFAULT_FALLBACK_IMAGE) {
+    target.onerror = null
+    target.src = DEFAULT_FALLBACK_IMAGE
+  }
+}
+
+function compressImage(file, maxWidth = 900, quality = 0.72) {
+  return new Promise((resolve) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) {
+      resolve(null)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const img = new Image()
+      img.onload = () => {
+        let width = img.width
+        let height = img.height
+
+        if (width > maxWidth || height > maxWidth) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width)
+            width = maxWidth
+          } else {
+            width = Math.round((width * maxWidth) / height)
+            height = maxWidth
+          }
+        }
+
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', quality))
+      }
+      img.onerror = () => resolve(e.target.result)
+      img.src = e.target.result
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
+}
+
 const seedListings = [
   { id: 1, title: 'Engineering Mathematics — 4th ed.', category: 'Books', price: 420, condition: 'Good', type: 'Sale', seller: 'Aarav Menon', initials: 'AM', campus: 'North Campus', posted: '2h ago', image: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?auto=format&fit=crop&w=800&q=80', accent: 'paper', description: 'Clean copy with light highlighting in two chapters. Great for first-year engineering.' },
-  { id: 2, title: 'Casio fx-991EX ClassWiz', category: 'Electronics', price: 850, condition: 'Like new', type: 'Sale', seller: 'Nisha Kapoor', initials: 'NK', campus: 'North Campus', posted: '5h ago', image: 'https://images.unsplash.com/photo-1616627983827-4e16b16f90a5?auto=format&fit=crop&w=800&q=80', accent: 'blue', description: 'Barely used scientific calculator. Includes original case and fresh battery.' },
+  { id: 2, title: 'Casio fx-991EX ClassWiz', category: 'Electronics', price: 850, condition: 'Like new', type: 'Sale', seller: 'Nisha Kapoor', initials: 'NK', campus: 'North Campus', posted: '5h ago', image: 'https://images.unsplash.com/photo-1587145820266-a5951ee6f620?auto=format&fit=crop&w=800&q=80', accent: 'blue', description: 'Barely used scientific calculator. Includes original case and fresh battery.' },
   { id: 3, title: 'IKEA desk lamp + organizer', category: 'Room essentials', price: 650, condition: 'Good', type: 'Exchange', seller: 'Kabir Shah', initials: 'KS', campus: 'East Residence', posted: '1d ago', image: 'https://images.unsplash.com/photo-1507473885765-e6ed057f782c?auto=format&fit=crop&w=800&q=80', accent: 'amber', description: 'Moving out sale. Looking to exchange for a compact study chair or sell together.' },
   { id: 4, title: 'Lab coat / white coat — M', category: 'Academic supplies', price: 300, condition: 'Like new', type: 'Sale', seller: 'Meera Iyer', initials: 'MI', campus: 'North Campus', posted: '1d ago', image: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=800&q=80', accent: 'mint', description: 'Worn twice, freshly laundered and ready for practicals. Unisex medium.' },
   { id: 5, title: 'Yonex badminton racket', category: 'Sports & hobbies', price: 1200, condition: 'Good', type: 'Sale', seller: 'Rohan Das', initials: 'RD', campus: 'South Campus', posted: '2d ago', image: 'https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?auto=format&fit=crop&w=800&q=80', accent: 'orange', description: 'Well maintained racket with a fresh grip. Selling because I switched clubs.' },
@@ -29,8 +109,23 @@ function AuthGate() {
     let active = true
     const loadSession = async () => {
       if (isSupabaseConfigured) {
-        const { data } = await supabase.auth.getSession()
-        if (active) setUser(data.session?.user ?? null)
+        try {
+          const { data: sessionData } = await supabase.auth.getSession()
+          if (sessionData?.session) {
+            const { data: userData, error: userError } = await supabase.auth.getUser()
+            if (userError || !userData?.user) {
+              await supabase.auth.signOut()
+              sessionStorage.removeItem('campus-exchange-demo-user')
+              if (active) setUser(null)
+            } else {
+              if (active) setUser(userData.user)
+            }
+          } else {
+            if (active) setUser(null)
+          }
+        } catch {
+          if (active) setUser(null)
+        }
       } else {
         const demoUser = sessionStorage.getItem('campus-exchange-demo-user')
         if (active && demoUser) setUser({ email: demoUser })
@@ -40,8 +135,17 @@ function AuthGate() {
     loadSession()
 
     if (!isSupabaseConfigured) return () => { active = false }
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (active) setUser(session?.user ?? null)
+    const { data: subscription } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!session) {
+        if (active) setUser(null)
+        return
+      }
+      const { data: userData, error } = await supabase.auth.getUser()
+      if (error || !userData?.user) {
+        if (active) setUser(null)
+      } else {
+        if (active) setUser(userData.user)
+      }
     })
     return () => {
       active = false
@@ -91,6 +195,17 @@ function LoginPage({ onAuthenticated }) {
       if (mode === 'sign-up' && !result.data.session) {
         setNotice('Account created. Check your email to confirm it, then sign in.')
       } else {
+        if (result.data?.user?.id) {
+          try {
+            await supabase.from('profiles').upsert({
+              id: result.data.user.id,
+              full_name: fullName.trim() || result.data.user.user_metadata?.full_name || email.split('@')[0],
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' })
+          } catch {
+            // Handled on load
+          }
+        }
         onAuthenticated(result.data.user)
       }
     } catch (authError) {
@@ -188,7 +303,7 @@ function App({ user, onSignOut }) {
             .join('')
             .toUpperCase(),
           posted: 'Recently',
-          image: item.image || 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=800&q=80',
+          image: getProductImageUrl(item),
           accent: 'paper'
         }
       })
@@ -262,7 +377,7 @@ function App({ user, onSignOut }) {
             .join('')
             .toUpperCase(),
           posted: 'Recently',
-          image: item.image || 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=800&q=80',
+          image: getProductImageUrl(item),
           accent: 'paper'
         }
       })
@@ -288,20 +403,49 @@ function App({ user, onSignOut }) {
     setToast(saved.includes(id) ? 'Removed from your saved items' : 'Saved to your shortlist')
   }
 
-  const createListing = async (event) => {
+  const createListing = async (event, imageFile, imagePreview) => {
     event.preventDefault()
-
-    if (!isSupabaseConfigured || !user?.id) {
-      setToast('Please sign in with your Supabase account.')
-      return
-    }
 
     const form = new FormData(event.currentTarget)
 
     const fullName =
-      user.user_metadata?.full_name ||
-      user.email?.split('@')[0] ||
+      user?.user_metadata?.full_name ||
+      user?.email?.split('@')[0] ||
       'Student'
+
+    let finalImageUrl = imagePreview || ''
+
+    if (!finalImageUrl && imageFile) {
+      finalImageUrl = (await compressImage(imageFile, 900, 0.72)) || ''
+    }
+
+    if (!finalImageUrl) {
+      finalImageUrl = DEFAULT_FALLBACK_IMAGE
+    }
+
+    if (!isSupabaseConfigured || !user?.id) {
+      const newListing = {
+        id: Date.now(),
+        title: form.get('title'),
+        category: form.get('category'),
+        price: Number(form.get('price')),
+        condition: form.get('condition'),
+        type: form.get('type'),
+        description: form.get('description') || '',
+        image: finalImageUrl,
+        campus: 'North Campus',
+        seller: fullName,
+        initials: fullName.split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || 'ST',
+        posted: 'Just now',
+        accent: 'paper'
+      }
+
+      setListings(current => [newListing, ...current])
+      setModal(null)
+      setActiveView('discover')
+      setToast('Listing published successfully!')
+      return
+    }
 
     try {
       // Make sure the seller profile exists
@@ -313,7 +457,14 @@ function App({ user, onSignOut }) {
           updated_at: new Date().toISOString()
         }, { onConflict: 'id' })
 
-      if (profileError) throw profileError
+      if (profileError) {
+        if (profileError.message?.includes('profiles_id_fkey') || profileError.code === '23503') {
+          await supabase.auth.signOut()
+          onSignOut?.()
+          throw new Error('Your session expired or your account was not found in the database. Please sign in or create an account.')
+        }
+        throw profileError
+      }
 
       // Save listing in Supabase
       const { data, error } = await supabase
@@ -326,7 +477,7 @@ function App({ user, onSignOut }) {
           condition: form.get('condition'),
           type: form.get('type'),
           description: form.get('description') || '',
-          image: 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=800&q=80',
+          image: finalImageUrl,
           campus: 'North Campus'
         })
         .select()
@@ -344,7 +495,7 @@ function App({ user, onSignOut }) {
           .join('')
           .toUpperCase(),
         posted: 'Just now',
-        image: data.image,
+        image: getProductImageUrl(data?.image || finalImageUrl),
         accent: 'paper'
       }
 
@@ -365,7 +516,7 @@ function App({ user, onSignOut }) {
       <nav className="desktop-nav">
         <button className={activeView === 'discover' ? 'nav-active' : ''} onClick={() => setActiveView('discover')}>Discover</button>
         <button className={activeView === 'saved' ? 'nav-active' : ''} onClick={() => setActiveView('saved')}>Saved <span className="nav-count">{saved.length}</span></button>
-        <button onClick={() => setModal('messages')}>Messages <span className="nav-dot" /></button>
+        <button onClick={() => { setSelectedListing(null); setModal('messages') }}>Messages <span className="nav-dot" /></button>
       </nav>
       <div className="top-actions">
         <button className="icon-btn notification" aria-label="Notifications"><Bell size={18} /><span /></button>
@@ -373,12 +524,11 @@ function App({ user, onSignOut }) {
         <button className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu"><Menu size={21} /></button>
       </div>
     </header>
-    {menuOpen && <div className="mobile-nav"><button onClick={() => { setActiveView('discover'); setMenuOpen(false) }}>Discover</button><button onClick={() => { setActiveView('saved'); setMenuOpen(false) }}>Saved ({saved.length})</button><button onClick={() => setModal('messages')}>Messages</button></div>}
+    {menuOpen && <div className="mobile-nav"><button onClick={() => { setActiveView('discover'); setMenuOpen(false) }}>Discover</button><button onClick={() => { setActiveView('saved'); setMenuOpen(false) }}>Saved ({saved.length})</button><button onClick={() => { setSelectedListing(null); setModal('messages') }}>Messages</button></div>}
 
     <main>
       <section className="hero">
         <div><div className="eyebrow"><span className="status-light" /> LIVE NETWORK / NORTH CAMPUS</div><h1>Find useful things.<br /><em>Keep them moving.</em></h1><p>A trusted marketplace for your campus community. Buy, sell, and exchange what you need — nearby.</p></div>
-        <div className="hero-stats"><div><strong>{listings.length * 38}+</strong><span>ACTIVE LISTINGS</span></div><div><strong>1.2k</strong><span>STUDENTS HERE</span></div><div><strong>4.9</strong><span>TRUST SCORE</span></div></div>
       </section>
 
       <section className="workspace">
@@ -392,24 +542,28 @@ function App({ user, onSignOut }) {
           <div className="control-bar"><div className="search-box"><Search size={18} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search books, calculators, furniture..." /><kbd>⌘ K</kbd></div><button className={`filter-btn ${filtersOpen ? 'filter-active' : ''}`} onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={16} /> Filters <span className="filter-count">{[condition !== 'All conditions', listingType !== 'All types'].filter(Boolean).length || ''}</span></button></div>
           {filtersOpen && <div className="filters-panel"><label>Condition<select value={condition} onChange={event => setCondition(event.target.value)}><option>All conditions</option><option>Like new</option><option>Good</option></select></label><label>Listing type<select value={listingType} onChange={event => setListingType(event.target.value)}><option>All types</option><option>Sale</option><option>Exchange</option></select></label><button onClick={() => { setCondition('All conditions'); setListingType('All types') }}>Reset</button></div>}
           <div className="result-row"><span>{visibleListings.length} ITEMS IN YOUR AREA</span><button>Recently added <ChevronDown size={13} /></button></div>
-          {visibleListings.length ? <div className="listing-grid">{visibleListings.map(item => <article className="listing-card" key={item.id} onClick={() => setSelected(item)}><div className={`listing-image ${item.accent}`}><img src={item.image} alt="" /><span className="type-tag">{item.type === 'Exchange' ? '↔ EXCHANGE' : '● FOR SALE'}</span><button className={`save-btn ${saved.includes(item.id) ? 'is-saved' : ''}`} onClick={event => { event.stopPropagation(); toggleSaved(item.id) }} aria-label="Save listing"><Heart size={17} fill={saved.includes(item.id) ? 'currentColor' : 'none'} /></button></div><div className="listing-info"><div className="listing-category">{item.category} <span>• {item.condition}</span></div><h3>{item.title}</h3><div className="listing-bottom"><strong>₹{item.price.toLocaleString('en-IN')}</strong><span><MapPin size={12} />{item.campus}</span></div><div className="seller-row"><span className="avatar">{item.initials}</span><span>{item.seller}</span><span className="posted">{item.posted}</span></div></div></article>)}</div> : <div className="empty-state"><Bookmark size={29} /><h3>{activeView === 'saved' ? 'Your shortlist is empty' : 'Nothing matches that search'}</h3><p>{activeView === 'saved' ? 'Tap the heart on an item to keep it here.' : 'Try a different keyword or reset your filters.'}</p></div>}
+          {visibleListings.length ? <div className="listing-grid">{visibleListings.map(item => <article className="listing-card" key={item.id} onClick={() => setSelected(item)}><div className={`listing-image ${item.accent}`}><img src={getProductImageUrl(item)} alt={item.title || 'Product listing'} loading="lazy" onError={handleImageError} /><span className="type-tag">{item.type === 'Exchange' ? '↔ EXCHANGE' : '● FOR SALE'}</span><button className={`save-btn ${saved.includes(item.id) ? 'is-saved' : ''}`} onClick={event => { event.stopPropagation(); toggleSaved(item.id) }} aria-label="Save listing"><Heart size={17} fill={saved.includes(item.id) ? 'currentColor' : 'none'} /></button></div><div className="listing-info"><div className="listing-category">{item.category} <span>• {item.condition}</span></div><h3>{item.title}</h3><div className="listing-bottom"><strong>₹{item.price.toLocaleString('en-IN')}</strong><span><MapPin size={12} />{item.campus}</span></div><div className="seller-row"><span className="avatar">{item.initials}</span><span>{item.seller}</span><span className="posted">{item.posted}</span></div></div></article>)}</div> : <div className="empty-state"><Bookmark size={29} /><h3>{activeView === 'saved' ? 'Your shortlist is empty' : 'Nothing matches that search'}</h3><p>{activeView === 'saved' ? 'Tap the heart on an item to keep it here.' : 'Try a different keyword or reset your filters.'}</p></div>}
         </div>
       </section>
     </main>
     <footer><span>© 2025 CAMPUS EXCHANGE / BUILT FOR STUDENTS</span><span><a href="#safety">SAFETY CENTRE</a><a href="#rules">COMMUNITY RULES</a></span></footer>
     {selected && (
-  <ListingDetail
-    item={selected}
-    saved={saved.includes(selected.id)}
-    onSave={() => toggleSaved(selected.id)}
-    onClose={() => setSelected(null)}
-    onMessage={() => {
-      setSelectedListing(selected)
-      setSelected(null)
-      setModal('messages')
-    }}
-  />
-)}
+      <ListingDetail
+        item={selected}
+        saved={saved.includes(selected.id)}
+        onSave={() => toggleSaved(selected.id)}
+        onClose={() => setSelected(null)}
+        onMessage={() => {
+          if (user?.id && selected?.seller_id && user.id === selected.seller_id) {
+            setToast("You cannot message yourself on your own listing.")
+            return
+          }
+          setSelectedListing(selected)
+          setSelected(null)
+          setModal('messages')
+        }}
+      />
+    )}
     {modal === 'create' && <CreateModal onClose={() => setModal(null)} onSubmit={createListing} />}
     {modal === 'messages' && (
       <MessageModal
@@ -429,108 +583,40 @@ function getInitials(email = '') {
 }
 
 function Overlay({ children, onClose, wide = false }) { return <div className="overlay" onMouseDown={event => event.target === event.currentTarget && onClose()}><div className={`dialog ${wide ? 'dialog-wide' : ''}`}>{children}</div></div> }
-function ListingDetail({ item, saved, onSave, onClose, onMessage }) { return <Overlay onClose={onClose} wide><div className="dialog-image"><img src={item.image} alt={item.title} /><button className="close-btn" onClick={onClose}><X size={19} /></button></div><div className="detail-content"><div className="eyebrow">{item.type.toUpperCase()} / {item.category.toUpperCase()}</div><h2>{item.title}</h2><div className="detail-price">₹{item.price.toLocaleString('en-IN')} <span>· {item.condition}</span></div><p>{item.description}</p><div className="detail-seller"><span className="avatar avatar-large">{item.initials}</span><div><strong>{item.seller}</strong><span><MapPin size={13} /> {item.campus} · member since 2023</span></div><button className="text-link">View profile <ArrowUpRight size={14} /></button></div><div className="dialog-actions"><button className="secondary-btn" onClick={onSave}><Heart size={16} fill={saved ? 'currentColor' : 'none'} /> {saved ? 'Saved' : 'Save item'}</button><button className="primary-btn" onClick={onMessage}><MessageSquare size={16} /> Message seller</button></div><div className="report-link">Something not right? <button>Report this listing</button></div></div></Overlay> }
-function CreateModal({ onClose, onSubmit }) { return <Overlay onClose={onClose}><div className="modal-head"><div><div className="eyebrow">03 / NEW LISTING</div><h2>Put it back in play.</h2></div><button className="close-btn plain" onClick={onClose}><X size={19} /></button></div><form className="listing-form" onSubmit={onSubmit}><label>What are you listing?<input name="title" required placeholder="e.g. Data Structures textbook" /></label><div className="form-grid"><label>Category<select name="category"><option>Books</option><option>Electronics</option><option>Room essentials</option><option>Academic supplies</option><option>Sports & hobbies</option></select></label><label>Price (₹)<input name="price" required type="number" min="0" placeholder="0" /></label></div><div className="form-grid"><label>Condition<select name="condition"><option>Like new</option><option>Good</option></select></label><label>Listing type<select name="type"><option>Sale</option><option>Exchange</option></select></label></div><label>Description <textarea name="description" rows="3" placeholder="Add a little context for fellow students..." /></label><button className="upload-box" type="button"><ImagePlus size={21} /><span><strong>Add photos</strong><small>JPG or PNG · up to 5MB</small></span></button><button className="primary-btn submit-btn" type="submit">Publish listing <ArrowUpRight size={16} /></button></form></Overlay> }
+function ListingDetail({ item, saved, onSave, onClose, onMessage }) { return <Overlay onClose={onClose} wide><div className="dialog-image"><img src={getProductImageUrl(item)} alt={item.title || 'Product details'} onError={handleImageError} /><button className="close-btn" onClick={onClose}><X size={19} /></button></div><div className="detail-content"><div className="eyebrow">{item.type.toUpperCase()} / {item.category.toUpperCase()}</div><h2>{item.title}</h2><div className="detail-price">₹{item.price.toLocaleString('en-IN')} <span>· {item.condition}</span></div><p>{item.description}</p><div className="detail-seller"><span className="avatar avatar-large">{item.initials}</span><div><strong>{item.seller}</strong><span><MapPin size={13} /> {item.campus} · member since 2023</span></div><button className="text-link">View profile <ArrowUpRight size={14} /></button></div><div className="dialog-actions"><button className="secondary-btn" onClick={onSave}><Heart size={16} fill={saved ? 'currentColor' : 'none'} /> {saved ? 'Saved' : 'Save item'}</button><button className="primary-btn" onClick={onMessage}><MessageSquare size={16} /> Message seller</button></div><div className="report-link">Something not right? <button>Report this listing</button></div></div></Overlay> }
+function CreateModal({ onClose, onSubmit }) {
+  const [imagePreview, setImagePreview] = useState('')
+  const [imageFile, setImageFile] = useState(null)
+  const [compressing, setCompressing] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const fileInputRef = useRef(null)
 
-function MessageModal({ listing, user, onClose, onToast }) {
-  const [messages, setMessages] = useState([])
-  const [message, setMessage] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [conversationId, setConversationId] = useState(null)
-
-  useEffect(() => {
-    if (!listing?.id || !user?.id) return
-
-    let active = true
-
-    const loadConversation = async () => {
-      setLoading(true)
-
-      try {
-        const { data: existing, error: searchError } = await supabase
-          .from('conversations')
-          .select('*')
-          .eq('listing_id', listing.id)
-          .eq('buyer_id', user.id)
-          .eq('seller_id', listing.seller_id)
-          .maybeSingle()
-
-        if (searchError) throw searchError
-
-        let conversation = existing
-
-        if (!conversation) {
-          const { data, error } = await supabase
-            .from('conversations')
-            .insert({
-              listing_id: listing.id,
-              buyer_id: user.id,
-              seller_id: listing.seller_id
-            })
-            .select()
-            .single()
-
-          if (error) throw error
-          conversation = data
-        }
-
-        if (!active) return
-
-        setConversationId(conversation.id)
-
-        const { data: loadedMessages, error: messagesError } =
-          await supabase
-            .from('messages')
-            .select('*')
-            .eq('conversation_id', conversation.id)
-            .order('created_at', { ascending: true })
-
-        if (messagesError) throw messagesError
-
-        if (active) setMessages(loadedMessages || [])
-      } catch (error) {
-        console.error('Conversation error:', error)
-        onToast(error.message || 'Could not load conversation')
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
-
-    loadConversation()
-
-    return () => {
-      active = false
-    }
-  }, [listing?.id, user?.id])
-
-  const sendMessage = async (event) => {
-    event.preventDefault()
-
-    if (!message.trim() || !conversationId || sending) return
-
-    setSending(true)
-
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageFile(file)
+    setCompressing(true)
     try {
-      const { data, error } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: conversationId,
-          sender_id: user.id,
-          content: message.trim()
-        })
-        .select()
-        .single()
-
-      if (error) throw error
-
-      setMessages(previous => [...previous, data])
-      setMessage('')
-    } catch (error) {
-      console.error('Send message error:', error)
-      onToast(error.message || 'Message could not be sent')
+      const compressed = await compressImage(file, 900, 0.72)
+      setImagePreview(compressed || '')
+    } catch {
+      // Fallback to basic file read
+      const reader = new FileReader()
+      reader.onload = (loadEvt) => setImagePreview(loadEvt.target.result)
+      reader.readAsDataURL(file)
     } finally {
-      setSending(false)
+      setCompressing(false)
+    }
+  }
+
+  const handleFormSubmit = async (e) => {
+    e.preventDefault()
+    if (submitting) return
+    setSubmitting(true)
+    try {
+      await onSubmit(e, imageFile, imagePreview)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -538,63 +624,439 @@ function MessageModal({ listing, user, onClose, onToast }) {
     <Overlay onClose={onClose}>
       <div className="modal-head">
         <div>
+          <div className="eyebrow">03 / NEW LISTING</div>
+          <h2>Put it back in play.</h2>
+        </div>
+        <button className="close-btn plain" onClick={onClose}><X size={19} /></button>
+      </div>
+      <form className="listing-form" onSubmit={handleFormSubmit}>
+        <label>What are you listing?<input name="title" required placeholder="e.g. Data Structures textbook" /></label>
+        <div className="form-grid">
+          <label>Category<select name="category"><option>Books</option><option>Electronics</option><option>Room essentials</option><option>Academic supplies</option><option>Sports & hobbies</option></select></label>
+          <label>Price (₹)<input name="price" required type="number" min="0" placeholder="0" /></label>
+        </div>
+        <div className="form-grid">
+          <label>Condition<select name="condition"><option>Like new</option><option>Good</option></select></label>
+          <label>Listing type<select name="type"><option>Sale</option><option>Exchange</option></select></label>
+        </div>
+        <label>Description <textarea name="description" rows="3" placeholder="Add a little context for fellow students..." /></label>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={handleFileChange}
+        />
+
+        <button
+          className="upload-box"
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          style={{ cursor: 'pointer' }}
+        >
+          {compressing ? (
+            <span style={{ textAlign: 'center' }}><strong>Optimizing photo...</strong><small>Preparing for fast upload</small></span>
+          ) : imagePreview ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '0 8px' }}>
+              <img
+                src={imagePreview}
+                alt="Selected preview"
+                style={{ width: '46px', height: '46px', objectFit: 'cover', borderRadius: '3px' }}
+              />
+              <span style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                  {imageFile?.name || 'Photo selected'}
+                </strong>
+                <small style={{ color: 'var(--dp-color-accent, #e35324)' }}>Click to change photo</small>
+              </span>
+            </div>
+          ) : (
+            <>
+              <ImagePlus size={21} />
+              <span><strong>Add photos</strong><small>JPG, PNG or WEBP · auto-optimized</small></span>
+            </>
+          )}
+        </button>
+
+        <button className="primary-btn submit-btn" type="submit" disabled={submitting || compressing}>
+          {submitting ? 'Publishing listing...' : 'Publish listing'} <ArrowUpRight size={16} />
+        </button>
+      </form>
+    </Overlay>
+  )
+}
+
+function MessageModal({ listing, user, onClose, onToast }) {
+  const [conversations, setConversations] = useState([])
+  const [activeConv, setActiveConv] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const messagesEndRef = useRef(null)
+
+  const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
+
+  const loadConversations = async () => {
+    if (!isSupabaseConfigured || !user?.id) {
+      try {
+        const demo = JSON.parse(sessionStorage.getItem('campus-exchange-demo-convs') || '[]')
+        setConversations(demo)
+      } catch {
+        setConversations([])
+      }
+      return
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('conversations')
+        .select('*, listings(id, title, image, price, seller_id), buyer:profiles!conversations_buyer_id_fkey(full_name), seller:profiles!conversations_seller_id_fkey(full_name)')
+        .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
+        .order('created_at', { ascending: false })
+
+      if (!error && data) {
+        setConversations(data)
+      }
+    } catch (err) {
+      console.error('Error loading conversations:', err)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+
+    const init = async () => {
+      setLoading(true)
+      await loadConversations()
+
+      if (!listing) {
+        setLoading(false)
+        return
+      }
+
+      if (!isSupabaseConfigured || !user?.id || !isUUID(listing.id) || !isUUID(listing.seller_id)) {
+        const demoConvId = `demo-${listing.id}`
+        const demoConv = {
+          id: demoConvId,
+          isDemo: true,
+          listing_id: listing.id,
+          listing_title: listing.title,
+          other_name: listing.seller || 'Seller',
+          other_initials: listing.initials || 'S'
+        }
+        if (active) {
+          setActiveConv(demoConv)
+          try {
+            const stored = JSON.parse(sessionStorage.getItem(`demo-msgs-${demoConvId}`) || '[]')
+            setMessages(stored)
+          } catch {
+            setMessages([])
+          }
+          setLoading(false)
+        }
+        return
+      }
+
+      try {
+        const { data: existing } = await supabase
+          .from('conversations')
+          .select('*, listings(id, title, image, price, seller_id), buyer:profiles!conversations_buyer_id_fkey(full_name), seller:profiles!conversations_seller_id_fkey(full_name)')
+          .eq('listing_id', listing.id)
+          .eq('buyer_id', user.id)
+          .eq('seller_id', listing.seller_id)
+          .maybeSingle()
+
+        let conv = existing
+
+        if (!conv) {
+          const { data: created, error: createError } = await supabase
+            .from('conversations')
+            .insert({
+              listing_id: listing.id,
+              buyer_id: user.id,
+              seller_id: listing.seller_id
+            })
+            .select('*, listings(id, title, image, price, seller_id), buyer:profiles!conversations_buyer_id_fkey(full_name), seller:profiles!conversations_seller_id_fkey(full_name)')
+            .single()
+
+          if (createError) throw createError
+          conv = created
+        }
+
+        if (active && conv) {
+          setActiveConv(conv)
+          await fetchMessages(conv.id)
+        }
+      } catch (err) {
+        console.error('Failed to open conversation:', err)
+        onToast(err.message || 'Could not open conversation.')
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+
+    init()
+
+    return () => {
+      active = false
+    }
+  }, [listing?.id, user?.id])
+
+  const fetchMessages = async (convId) => {
+    if (!convId) return
+    if (typeof convId === 'string' && convId.startsWith('demo-')) {
+      try {
+        const stored = JSON.parse(sessionStorage.getItem(`demo-msgs-${convId}`) || '[]')
+        setMessages(stored)
+      } catch {
+        setMessages([])
+      }
+      return
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', convId)
+        .order('created_at', { ascending: true })
+
+      if (!error && data) {
+        setMessages(data)
+      }
+    } catch (err) {
+      console.error('Error fetching messages:', err)
+    }
+  }
+
+  useEffect(() => {
+    if (!activeConv?.id) return
+    const interval = setInterval(() => {
+      fetchMessages(activeConv.id)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [activeConv?.id])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const sendMessage = async (e) => {
+    e.preventDefault()
+    if (!message.trim() || !activeConv || sending) return
+
+    const content = message.trim()
+    setSending(true)
+
+    if (activeConv.isDemo || !isSupabaseConfigured || !user?.id) {
+      const newMsg = {
+        id: Date.now(),
+        conversation_id: activeConv.id,
+        sender_id: user?.id || 'me',
+        content,
+        created_at: new Date().toISOString()
+      }
+      const updated = [...messages, newMsg]
+      setMessages(updated)
+      sessionStorage.setItem(`demo-msgs-${activeConv.id}`, JSON.stringify(updated))
+      setMessage('')
+      setSending(false)
+
+      const demoConvs = JSON.parse(sessionStorage.getItem('campus-exchange-demo-convs') || '[]')
+      if (!demoConvs.some(c => c.id === activeConv.id)) {
+        demoConvs.unshift({
+          id: activeConv.id,
+          isDemo: true,
+          listing_title: activeConv.listing_title,
+          other_name: activeConv.other_name,
+          last_message: content
+        })
+        sessionStorage.setItem('campus-exchange-demo-convs', JSON.stringify(demoConvs))
+        setConversations(demoConvs)
+      }
+      return
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: activeConv.id,
+          sender_id: user.id,
+          content
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setMessages(prev => [...prev, data])
+      setMessage('')
+    } catch (err) {
+      console.error('Send message error:', err)
+      onToast(err.message || 'Message could not be sent.')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const getOtherParty = (conv) => {
+    if (conv.isDemo) {
+      return { name: conv.other_name || 'Seller', initials: conv.other_initials || 'S' }
+    }
+    const isCurrentUserBuyer = conv.buyer_id === user?.id
+    const name = isCurrentUserBuyer
+      ? (conv.seller?.full_name || 'Seller')
+      : (conv.buyer?.full_name || 'Buyer')
+    const initials = name.split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || 'U'
+    return { name, initials }
+  }
+
+  return (
+    <Overlay onClose={onClose}>
+      <div className="modal-head">
+        <div>
           <div className="eyebrow">04 / MESSAGES</div>
-          <h2>{listing?.title || 'Conversation'}</h2>
+          <h2>{activeConv ? (activeConv.listings?.title || activeConv.listing_title || 'Conversation') : 'Your conversations'}</h2>
         </div>
         <button className="close-btn plain" onClick={onClose}>
           <X size={19} />
         </button>
       </div>
 
-      {!listing || !user ? (
-        <p>Please select a listing and log in first.</p>
-      ) : (
+      {!user ? (
+        <p style={{ padding: '24px 0', color: '#68757a', textAlign: 'center' }}>Please sign in to access your messages.</p>
+      ) : activeConv ? (
         <>
-          <div className="conversation">
-            <span className="avatar">{listing.initials}</span>
-            <div>
-              <strong>{listing.seller}</strong>
-              <p>{listing.title}</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid #c5ccce' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span className="avatar avatar-small">{getOtherParty(activeConv).initials}</span>
+              <div>
+                <strong style={{ fontSize: '13px', color: '#253137' }}>{getOtherParty(activeConv).name}</strong>
+                <p style={{ margin: 0, fontSize: '11px', color: '#68757a' }}>
+                  {activeConv.listings?.title || activeConv.listing_title || 'Listing inquiry'}
+                </p>
+              </div>
             </div>
+            <button
+              onClick={() => { setActiveConv(null); loadConversations(); }}
+              style={{ background: 'transparent', border: 'none', color: 'var(--dp-color-accent, #e35324)', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              ← All conversations
+            </button>
           </div>
 
-          <div className="message-list">
+          <div
+            style={{
+              maxHeight: '300px',
+              minHeight: '180px',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '9px',
+              padding: '16px 4px',
+              marginTop: '4px'
+            }}
+          >
             {loading ? (
-              <p>Loading messages...</p>
+              <p style={{ color: '#68757a', textAlign: 'center', margin: 'auto' }}>Loading messages...</p>
             ) : messages.length === 0 ? (
-              <p>Start the conversation by sending a message.</p>
+              <p style={{ color: '#68757a', textAlign: 'center', margin: 'auto', fontSize: '13px' }}>
+                No messages yet. Send a message to start chatting!
+              </p>
             ) : (
-              messages.map(item => (
-                <div
-                  key={item.id}
-                  className={
-                    item.sender_id === user.id
-                      ? 'message-bubble own'
-                      : 'message-bubble'
-                  }
-                >
-                  {item.content}
-                </div>
-              ))
+              messages.map(item => {
+                const isOwn = item.sender_id === user?.id
+                return (
+                  <div
+                    key={item.id}
+                    style={{
+                      alignSelf: isOwn ? 'flex-end' : 'flex-start',
+                      maxWidth: '78%',
+                      padding: '9px 13px',
+                      borderRadius: '12px',
+                      borderBottomRightRadius: isOwn ? '2px' : '12px',
+                      borderBottomLeftRadius: isOwn ? '12px' : '2px',
+                      background: isOwn ? 'var(--dp-color-field, #253137)' : '#dce2e3',
+                      color: isOwn ? '#ffffff' : '#253137',
+                      fontSize: '13px',
+                      lineHeight: '1.4',
+                      wordBreak: 'break-word',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.06)'
+                    }}
+                  >
+                    {item.content}
+                  </div>
+                )
+              })
             )}
+            <div ref={messagesEndRef} />
           </div>
 
           <form className="message-compose" onSubmit={sendMessage}>
             <input
               value={message}
-              onChange={event => setMessage(event.target.value)}
-              placeholder="Write a message..."
-              disabled={loading || !conversationId}
+              onChange={e => setMessage(e.target.value)}
+              placeholder={`Message ${getOtherParty(activeConv).name}...`}
+              disabled={loading || sending}
             />
             <button
               className="primary-btn"
               type="submit"
-              disabled={sending || loading || !conversationId}
+              disabled={sending || loading || !message.trim()}
             >
               <Send size={15} />
             </button>
           </form>
         </>
+      ) : (
+        <div style={{ minHeight: '200px' }}>
+          {conversations.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 10px', color: '#68757a' }}>
+              <MessageSquare size={32} style={{ opacity: 0.45, marginBottom: '8px' }} />
+              <h3 style={{ margin: '6px 0 4px', fontSize: '15px', color: '#344148' }}>No conversations yet</h3>
+              <p style={{ margin: 0, fontSize: '12px' }}>When you message a seller on an item or a buyer messages you, private chats will appear here.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: '4px', maxHeight: '340px', overflowY: 'auto' }}>
+              {conversations.map(c => {
+                const other = getOtherParty(c)
+                return (
+                  <div
+                    key={c.id}
+                    onClick={() => {
+                      setActiveConv(c)
+                      fetchMessages(c.id)
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '12px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      borderBottom: '1px solid #d4dada',
+                      transition: 'background 120ms'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#dce1e2'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span className="avatar avatar-small">{other.initials}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <strong style={{ fontSize: '13px', color: '#253137', display: 'block' }}>{other.name}</strong>
+                      <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#68757a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.listings?.title || c.listing_title || 'Listing inquiry'}
+                      </p>
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--dp-color-accent, #e35324)', fontWeight: 600 }}>Chat →</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
     </Overlay>
   )
