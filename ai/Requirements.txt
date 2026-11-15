@@ -1,5 +1,7 @@
 langchain
 
+dotenv
+
 langchain-core
 
 langchain-community
@@ -10,7 +12,6 @@ langchain-text-splitters
 
 faiss-cpu
 
-jupyter
 
 ipykernel
 

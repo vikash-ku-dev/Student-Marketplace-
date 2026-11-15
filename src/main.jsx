@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, useNavigate } from 'react-router-dom'
 import {
-  ArrowUpRight, Bell, Bookmark, BookOpen, Check, ChevronDown, CircleUserRound,
-  Clock3, Filter, Heart, ImagePlus, Laptop, LogOut, MapPin, Menu, MessageSquare,
-  PackageOpen, Plus, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles,
+  ArrowUpRight, Bell, Bookmark, BookOpen, Bot, Check, ChevronDown, CircleUserRound,
+  Clock3, Copy, ExternalLink, Filter, Heart, ImagePlus, Laptop, LogOut, MapPin, Menu, MessageSquare,
+  PackageOpen, Plus, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles,
   Tag, X, Zap
 } from 'lucide-react'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
@@ -514,9 +514,13 @@ function App({ user, onSignOut }) {
     <header className="topbar">
       <button className="brand" onClick={() => { setActiveView('discover'); setCategory('All items') }}><span className="brand-mark">CX</span><span>Campus<span className="brand-accent">Exchange</span></span></button>
       <nav className="desktop-nav">
-        <button className={activeView === 'discover' ? 'nav-active' : ''} onClick={() => setActiveView('discover')}>Discover</button>
-        <button className={activeView === 'saved' ? 'nav-active' : ''} onClick={() => setActiveView('saved')}>Saved <span className="nav-count">{saved.length}</span></button>
-        <button onClick={() => { setSelectedListing(null); setModal('messages') }}>Messages <span className="nav-dot" /></button>
+        <button className={activeView === 'discover' && !modal ? 'nav-active' : ''} onClick={() => { setActiveView('discover'); setModal(null) }}>Discover</button>
+        <button className={activeView === 'saved' && !modal ? 'nav-active' : ''} onClick={() => { setActiveView('saved'); setModal(null) }}>Saved <span className="nav-count">{saved.length}</span></button>
+        <button className={modal === 'messages' ? 'nav-active' : ''} onClick={() => { setSelectedListing(null); setModal('messages') }}>Messages <span className="nav-dot" /></button>
+        <button className={modal === 'ai-assistant' ? 'nav-active' : ''} onClick={() => setModal('ai-assistant')} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <Sparkles size={14} style={{ color: 'var(--dp-color-accent)' }} />
+          <span>Campus AI</span>
+        </button>
       </nav>
       <div className="top-actions">
         <button className="icon-btn notification" aria-label="Notifications"><Bell size={18} /><span /></button>
@@ -524,7 +528,16 @@ function App({ user, onSignOut }) {
         <button className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu"><Menu size={21} /></button>
       </div>
     </header>
-    {menuOpen && <div className="mobile-nav"><button onClick={() => { setActiveView('discover'); setMenuOpen(false) }}>Discover</button><button onClick={() => { setActiveView('saved'); setMenuOpen(false) }}>Saved ({saved.length})</button><button onClick={() => { setSelectedListing(null); setModal('messages') }}>Messages</button></div>}
+    {menuOpen && (
+      <div className="mobile-nav">
+        <button onClick={() => { setActiveView('discover'); setModal(null); setMenuOpen(false) }}>Discover</button>
+        <button onClick={() => { setActiveView('saved'); setModal(null); setMenuOpen(false) }}>Saved ({saved.length})</button>
+        <button onClick={() => { setSelectedListing(null); setModal('messages'); setMenuOpen(false) }}>Messages</button>
+        <button onClick={() => { setModal('ai-assistant'); setMenuOpen(false) }} style={{ color: 'var(--dp-color-accent)', fontWeight: 600 }}>
+          ✦ CampusDude AI Assistant
+        </button>
+      </div>
+    )}
 
     <main>
       <section className="hero">
@@ -573,7 +586,24 @@ function App({ user, onSignOut }) {
         onToast={setToast}
       />
     )}
+    {modal === 'ai-assistant' && (
+      <AiAssistantModal
+        user={user}
+        onClose={() => setModal(null)}
+        onToast={setToast}
+      />
+    )}
     {modal === 'profile' && <ProfileModal user={user} onClose={() => setModal(null)} onToast={setToast} onSignOut={onSignOut} />}
+    <button
+      className="ai-floating-trigger"
+      onClick={() => setModal('ai-assistant')}
+      aria-label="Ask Campus Dude AI"
+      title="Ask Campus Dude AI"
+    >
+      <span className="ai-pulse-dot" />
+      <Sparkles size={14} style={{ color: 'var(--dp-color-accent)' }} />
+      <span>Ask Dude AI</span>
+    </button>
     {toast && <div className="toast"><Check size={17} />{toast}</div>}
   </div>
 }
@@ -1061,6 +1091,548 @@ function MessageModal({ listing, user, onClose, onToast }) {
     </Overlay>
   )
 }
+function renderInline(str) {
+  if (!str) return ''
+  return str
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/\[(.*?)\]\((https?:\/\/.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--dp-color-accent);text-decoration:underline;">$1</a>')
+}
+
+function formatAiText(text) {
+  if (!text) return null
+  const paragraphs = text.split('\n\n')
+  return paragraphs.map((para, i) => {
+    const trimmed = para.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith('```') && trimmed.endsWith('```')) {
+      const code = trimmed.slice(3, -3).replace(/^[a-z]+\n/, '')
+      return <pre key={i}>{code}</pre>
+    }
+    if (trimmed.startsWith('•') || trimmed.startsWith('- ') || trimmed.includes('\n•') || trimmed.includes('\n- ')) {
+      const lines = trimmed.split('\n')
+      return (
+        <ul key={i} style={{ margin: '6px 0', paddingLeft: '18px' }}>
+          {lines.map((line, idx) => {
+            const clean = line.replace(/^[•\-]\s*/, '').trim()
+            if (!clean) return null
+            return <li key={idx} dangerouslySetInnerHTML={{ __html: renderInline(clean) }} />
+          })}
+        </ul>
+      )
+    }
+    return <p key={i} style={{ margin: '6px 0', lineHeight: '1.5' }} dangerouslySetInnerHTML={{ __html: renderInline(trimmed) }} />
+  })
+}
+
+async function callGroqDirect(question, profile, history) {
+  const apiKey = import.meta.env.VITE_GROQ_API_KEY 
+  if (!apiKey) return null
+
+  const studentName = profile.name || 'Student'
+  const branch = profile.branch || 'Engineering'
+  const year = profile.year || 'Student'
+  const residence = profile.residence || 'Hosteller'
+
+  const systemPrompt = `You are Dude, the friendly, intelligent AI campus assistant for Guru Nanak Dev Engineering College (GNDEC), Ludhiana (https://www.gndec.ac.in/).
+Student details:
+- Name: ${studentName}
+- Branch: ${branch}
+- Year: ${year}
+- Residence: ${residence}
+
+Your guidelines:
+1. When asked about college rules (hostel curfew, 75% attendance policy, leave rules, library book limits, exam passing criteria, grading):
+   - Answer accurately according to GNDEC official policies.
+2. When asked to draft emails or applications (leave application, fee receipt, gate pass, bonafide):
+   - Draft a complete, polite application with Subject and placeholders like [Roll No] or [Date].
+3. For greetings, casual questions, or chit-chat:
+   - Chat naturally, politely, and warmly as a helpful campus buddy.
+4. If the student types random gibberish or characters (e.g. "jkdssbdb"):
+   - Politely tell them you didn't quite catch that, and invite them to ask about college rules, exams, hostel, or application drafts.
+5. Keep responses concise, clear, and student-friendly with markdown bold headers and bullet points.`
+
+  const messages = [
+    { role: 'system', content: systemPrompt }
+  ]
+
+  if (Array.isArray(history)) {
+    history.slice(-4).forEach(h => {
+      if (typeof h === 'string') {
+        const isDude = h.startsWith('Dude:')
+        messages.push({
+          role: isDude ? 'assistant' : 'user',
+          content: h.replace(/^(Dude|Student):\s*/, '')
+        })
+      } else if (h && h.sender && h.text) {
+        messages.push({
+          role: h.sender === 'assistant' ? 'assistant' : 'user',
+          content: h.text
+        })
+      }
+    })
+  }
+
+  messages.push({ role: 'user', content: question })
+
+  const models = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b']
+  for (const model of models) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.5,
+          max_tokens: 1024
+        })
+      })
+
+      if (res.ok) {
+        const data = await res.json()
+        const text = data?.choices?.[0]?.message?.content
+        if (text) return text
+      }
+    } catch (err) {
+      console.warn(`Groq query error with ${model}:`, err)
+    }
+  }
+
+  return null
+}
+
+function getClientCampusAnswer(query, name = 'Student', branch = 'CSE', year = '2nd Year') {
+  const q = query.toLowerCase().trim()
+
+  // Random letters / gibberish check
+  const isGibberish = !q.includes(' ') && q.length > 5 && !/[aeiou]{2,}/i.test(q)
+  if (isGibberish) {
+    return {
+      answer: `Hello! It looks like you typed *"${query}"*.\n\nI am **Dude**, your GNDEC campus assistant! You can ask me:\n• **Hostel rules & entry/exit timings**\n• **75% attendance criteria & medical leave**\n• **Central Library timings & book limits**\n• **Drafting official leave applications or emails**\n\nHow can I help you today?`,
+      sources: ['https://www.gndec.ac.in/'],
+      intent: 'knowledge'
+    }
+  }
+
+  // Greetings check
+  if (/^(hi|hello|hey|yo|dude|sup|good\s*(morning|afternoon|evening))/i.test(q)) {
+    return {
+      answer: `Hey ${name}! 👋 I am Dude, your GNDEC campus assistant.\n\nI can help you with college rules, hostel curfew, attendance criteria, or draft emails to your professors. What's on your mind?`,
+      sources: ['https://www.gndec.ac.in/'],
+      intent: 'knowledge'
+    }
+  }
+
+  // General "who are you" check
+  if (q.includes('who are you') || q.includes('what can you do') || q.includes('help')) {
+    return {
+      answer: `I am **Dude**, the AI campus assistant for **Guru Nanak Dev Engineering College (GNDEC)**.\n\nI can help you with:\n1. **College Rules & Regulations:** Hostel timings, 75% attendance rule, exam schedules, and library access.\n2. **Official Drafts:** Leave applications, fee receipt requests, and emails to HODs.\n3. **Campus Info:** Contact numbers, department guidance, and notifications.\n\nTry clicking one of the quick suggestions above or type your question!`,
+      sources: ['https://www.gndec.ac.in/'],
+      intent: 'knowledge'
+    }
+  }
+
+  if (q.includes('hostel') || q.includes('mess') || q.includes('curfew') || q.includes('gate pass') || q.includes('warden')) {
+    return {
+      answer: `**GNDEC Hostel Regulations & Timings:**\n\n• **Curfew Timings:** For boys hostels, the main gate entry closes at 9:30 PM. For girls hostel, entry closes at 7:30 PM (or as specified during summer/winter schedules).\n• **Night Out & Leave:** Students wishing to stay out must submit a written gate pass signed by the Hostel Warden / Chief Warden at least 24 hours in advance.\n• **Mess Timings:** Breakfast: 7:30 AM – 9:00 AM, Lunch: 12:30 PM – 2:00 PM, Dinner: 7:30 PM – 9:15 PM.\n• **Discipline:** Ragging in any form is strictly banned under UGC and college norms (Zero Tolerance Policy). Heavy appliances (heaters/irons) are prohibited in rooms.`,
+      sources: ['https://www.gndec.ac.in/?q=node/59'],
+      intent: 'knowledge'
+    }
+  }
+
+  if (q.includes('attendance') || q.includes('75%') || q.includes('medical') || q.includes('leave') || q.includes('shortage')) {
+    return {
+      answer: `**GNDEC Attendance Policy & Medical Leave Rules:**\n\n• **Minimum Required Attendance:** A minimum of **75% attendance** is mandatory in all theory and practical subjects to be eligible for university final examinations.\n• **Medical Leave:** In case of medical emergencies, medical certificates signed by a registered medical practitioner must be submitted to the HOD within 7 days of returning to campus.\n• **Shortage of Attendance:** Students with attendance between 65% and 75% may only be considered for condonation on valid medical or institutional representation grounds with Principal approval.`,
+      sources: ['https://www.gndec.ac.in/?q=node/12'],
+      intent: 'knowledge'
+    }
+  }
+
+  if (q.includes('library') || q.includes('book') || q.includes('reading room') || q.includes('fine')) {
+    return {
+      answer: `**GNDEC Central Library Information:**\n\n• **Timings:** Weekdays: 8:00 AM to 8:00 PM. Reading room remains open until 10:00 PM during mid-semester and final exams.\n• **Book Loan Limits:** B.Tech students can borrow up to 4 books for a period of 14 days. Book bank facility is available for SC/ST and needy students.\n• **Digital Library:** Provides access to IEEE Xplore, ScienceDirect, DELNET, and NPTEL lecture video databases.\n• **Overdue Fine:** ₹1 per book per day after the due date.`,
+      sources: ['https://www.gndec.ac.in/?q=node/33'],
+      intent: 'knowledge'
+    }
+  }
+
+  if (q.includes('draft') || q.includes('write email') || q.includes('write mail') || q.includes('application') || q.includes('letter')) {
+    const isLeave = q.includes('leave') || q.includes('fever') || q.includes('sick') || q.includes('medical')
+    const isFee = q.includes('fee') || q.includes('receipt') || q.includes('payment')
+    
+    let subject = isLeave ? `Application for Leave of Absence - ${name} (${branch})` : isFee ? `Request for Fee Receipt / Payment Clearance - ${name} (${branch})` : `Application regarding Academic Inquiry - ${name} (${branch})`
+    let body = isLeave
+      ? `Respected Head of Department / Academic Dean,\n\nI am ${name}, a student of ${branch} (${year}). I am writing to formally request leave of absence from [Start Date] to [End Date] due to medical reasons / family emergency.\n\nI have attached the relevant documentation for your kind consideration. I assure you that I will cover all missed lectures and practical assignments promptly upon my return.\n\nThanking you.\n\nYours sincerely,\n${name}\nRoll Number: [Your Roll No]\nBranch: ${branch} (${year})\nPhone: [Your Contact Number]`
+      : isFee
+      ? `Respected Accounts Officer / Dean Academics,\n\nI am ${name}, studying in ${branch} (${year}). I paid my college fees for the current semester on [Date of Transaction] via [UPI / Netbanking / NEFT / Challan].\n\nKindly issue the official fee receipt for my records and scholarship verification.\n\nTransaction Reference ID: [Enter Ref ID]\nAmount Paid: [Enter Amount]\n\nThanking you,\n${name}\nRoll No: [Your Roll No]\nBranch: ${branch}`
+      : `Respected Sir/Madam,\n\nI am ${name}, a student of ${branch} (${year}). I am writing to bring to your kind attention regarding [State your inquiry or request clearly here].\n\n[Explain relevant details, dates, or documents].\n\nI would be very grateful for your prompt guidance and assistance in this matter.\n\nThanking you,\nYours faithfully,\n${name}\nDepartment of ${branch}\nRoll Number: [Your Roll No]`
+
+    return {
+      answer: `**DRAFT APPLICATION — Review, fill in bracketed details, and submit:**\n\n**Subject:** ${subject}\n\n${body}`,
+      sources: ['https://www.gndec.ac.in/'],
+      intent: 'draft'
+    }
+  }
+
+  if (q.includes('exam') || q.includes('mst') || q.includes('marks') || q.includes('internal')) {
+    return {
+      answer: `**GNDEC Examination & Evaluation System:**\n\n• **Mid-Semester Tests (MST):** Two MSTs are conducted per semester. Attendance in both MSTs is mandatory for internal marks calculation.\n• **Evaluation Scheme:** 40% Internal Assessment (MSTs, quizzes, assignments, attendance) and 60% External University Assessment.\n• **Passing Marks:** Minimum 40% aggregate in each subject is required to clear credit requirements.`,
+      sources: ['https://www.gndec.ac.in/?q=node/25'],
+      intent: 'knowledge'
+    }
+  }
+
+  return {
+    answer: `**Guru Nanak Dev Engineering College (GNDEC) Knowledge Guide:**\n\nHere is information regarding your query on *"${query}"*:\n\n• **Academics & Department (${branch}):** For syllabus updates, notices, and faculty mentor assignments, check the [GNDEC Official Portal](https://www.gndec.ac.in/).\n• **Campus Support:** You can ask me about hostel rules, mess timings, library book loans, or ask me to draft formal applications.\n\nWhat specific detail would you like to know?`,
+    sources: ['https://www.gndec.ac.in/'],
+    intent: 'knowledge'
+  }
+}
+
+function AiAssistantModal({ user, onClose, onToast }) {
+  const [messages, setMessages] = useState(() => {
+    try {
+      sessionStorage.removeItem('campusdude-ai-messages')
+      sessionStorage.removeItem('campusdude-ai-messages-v2')
+      const saved = sessionStorage.getItem('campusdude-ai-messages-v3')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        const clean = parsed.filter(m => !m.text?.includes('Note: To enable live web-crawling') && !m.text?.includes('jkdssbdb'))
+        if (clean.length > 0) return clean
+      }
+    } catch {}
+    return [
+      {
+        id: 'welcome',
+        sender: 'assistant',
+        text: "Hello! I'm Dude, your GNDEC campus AI assistant.\n\nAsk me anything about college regulations, hostel curfew, attendance policies, exam schedules, or ask me to draft official emails and applications.",
+        sources: ['https://www.gndec.ac.in/']
+      }
+    ]
+  })
+
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [copiedId, setCopiedId] = useState(null)
+  const [branch, setBranch] = useState(() => localStorage.getItem('dude-profile-branch') || 'CSE')
+  const [year, setYear] = useState(() => localStorage.getItem('dude-profile-year') || '2nd Year')
+  const [residence, setResidence] = useState(() => localStorage.getItem('dude-profile-residence') || 'Hosteller')
+  const [editingProfile, setEditingProfile] = useState(false)
+
+  const messagesEndRef = useRef(null)
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('campusdude-ai-messages-v3', JSON.stringify(messages))
+    } catch {}
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  useEffect(() => {
+    localStorage.setItem('dude-profile-branch', branch)
+    localStorage.setItem('dude-profile-year', year)
+    localStorage.setItem('dude-profile-residence', residence)
+  }, [branch, year, residence])
+
+  const quickPrompts = [
+    { label: "🏨 Hostel Rules & Curfew", text: "What are the GNDEC hostel rules, mess timings, and gate pass procedure?" },
+    { label: "📊 75% Attendance Policy", text: "What is the GNDEC attendance rule and how to get medical leave approved?" },
+    { label: "📚 Library Loan & Timings", text: "What are the Central Library timings and book loan limits?" },
+    { label: "📝 Draft Leave Application", text: "Draft a leave application to HOD for 3 days due to fever" },
+    { label: "💳 Draft Fee Receipt Request", text: "Draft an email to accounts office requesting fee payment receipt" },
+    { label: "🏢 Official Contacts & Emails", text: "What are the official contact numbers and email addresses of GNDEC?" }
+  ]
+
+  const handleSend = async (queryText) => {
+    const textToSend = (typeof queryText === 'string' ? queryText : input).trim()
+    if (!textToSend || loading) return
+
+    const studentName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Student'
+    const userMsg = {
+      id: Date.now().toString(),
+      sender: 'user',
+      text: textToSend
+    }
+
+    setMessages(prev => [...prev, userMsg])
+    setInput('')
+    setLoading(true)
+
+    const payload = {
+      question: textToSend,
+      profile: {
+        name: studentName,
+        branch,
+        year,
+        residence
+      },
+      history: messages.slice(-4).map(m => `${m.sender === 'user' ? 'Student' : 'Dude'}: ${m.text}`)
+    }
+
+    try {
+      let data = null
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        if (res.ok) data = await res.json()
+      } catch (err) {
+        try {
+          const res = await fetch('http://localhost:8000/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+          if (res.ok) data = await res.json()
+        } catch {}
+      }
+
+      let aiText = data?.answer
+
+      // If backend was not running, query Groq direct from the browser
+      if (!aiText) {
+        aiText = await callGroqDirect(textToSend, { name: studentName, branch, year, residence }, messages)
+      }
+
+      if (aiText) {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender: 'assistant',
+            text: aiText,
+            sources: data?.sources || ['https://www.gndec.ac.in/'],
+            intent: data?.intent || 'knowledge'
+          }
+        ])
+      } else {
+        const fallbackAns = getClientCampusAnswer(textToSend, studentName, branch, year)
+        setMessages(prev => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender: 'assistant',
+            text: fallbackAns.answer,
+            sources: fallbackAns.sources,
+            intent: fallbackAns.intent
+          }
+        ])
+      }
+    } catch {
+      const fallbackAns = getClientCampusAnswer(textToSend, studentName, branch, year)
+      setMessages(prev => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          sender: 'assistant',
+          text: fallbackAns.answer,
+          sources: fallbackAns.sources,
+          intent: fallbackAns.intent
+        }
+      ])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCopy = (id, text) => {
+    navigator.clipboard.writeText(text)
+    setCopiedId(id)
+    onToast?.('Copied to clipboard!')
+    setTimeout(() => setCopiedId(null), 2000)
+  }
+
+  const handleReset = () => {
+    sessionStorage.removeItem('campusdude-ai-messages')
+    sessionStorage.removeItem('campusdude-ai-messages-v2')
+    sessionStorage.removeItem('campusdude-ai-messages-v3')
+    setMessages([
+      {
+        id: 'welcome',
+        sender: 'assistant',
+        text: "Hello! I'm Dude, your GNDEC campus AI assistant. How can I help you today?",
+        sources: ['https://www.gndec.ac.in/']
+      }
+    ])
+  }
+
+  return (
+    <Overlay onClose={onClose}>
+      <div className="ai-dialog">
+        <div className="modal-head" style={{ marginBottom: '14px', paddingBottom: '12px' }}>
+          <div>
+            <div className="eyebrow" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="status-light" />
+              <span>05 / GNDEC RAG ENGINE · CAMPUS ASSISTANT</span>
+            </div>
+            <h2 style={{ fontSize: '24px', display: 'flex', alignItems: 'center', gap: '8px', margin: '4px 0 0' }}>
+              <span>CampusDude AI</span>
+              <span style={{ fontSize: '11px', color: 'var(--dp-color-accent)', background: '#fcefe9', padding: '2px 8px', borderRadius: '3px', border: '1px solid #f8cdbe', font: '600 10px var(--dp-typography-mono)' }}>
+                RAG v2.0
+              </span>
+            </h2>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              onClick={handleReset}
+              className="close-btn plain"
+              title="Reset conversation"
+              style={{ display: 'grid', placeItems: 'center', width: '28px', height: '28px' }}
+            >
+              <RotateCcw size={15} />
+            </button>
+            <button className="close-btn plain" onClick={onClose}>
+              <X size={19} />
+            </button>
+          </div>
+        </div>
+
+        {/* Profile and College Banner */}
+        <div className="ai-meta-banner">
+          <div className="ai-profile-pills">
+            <span style={{ color: '#77848a', fontSize: '10px' }}>PROFILE:</span>
+            <span className="ai-profile-pill">🎓 {branch}</span>
+            <span className="ai-profile-pill">📅 {year}</span>
+            <span className="ai-profile-pill">🏠 {residence}</span>
+            <button
+              onClick={() => setEditingProfile(!editingProfile)}
+              style={{ background: 'transparent', color: 'var(--dp-color-accent)', fontSize: '10px', textDecoration: 'underline', padding: '0 4px', cursor: 'pointer' }}
+            >
+              {editingProfile ? 'Done' : 'Edit'}
+            </button>
+          </div>
+          <span style={{ color: '#68757a', fontSize: '10px' }}>🏛️ GNDEC Ludhiana</span>
+        </div>
+
+        {editingProfile && (
+          <div style={{ display: 'flex', gap: '10px', padding: '10px', background: '#d5dbdc', borderRadius: '3px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ font: '10px var(--dp-typography-mono)', color: '#566268' }}>BRANCH</span>
+              <select value={branch} onChange={e => setBranch(e.target.value)} style={{ padding: '4px 8px', borderRadius: '2px', border: '1px solid #b3bdc0', background: '#fff', fontSize: '12px' }}>
+                <option value="CSE">CSE</option>
+                <option value="IT">IT</option>
+                <option value="ECE">ECE</option>
+                <option value="EE">EE</option>
+                <option value="ME">ME</option>
+                <option value="CE">CE</option>
+                <option value="MBA">MBA / MCA</option>
+              </select>
+            </label>
+            <label style={{ fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ font: '10px var(--dp-typography-mono)', color: '#566268' }}>YEAR</span>
+              <select value={year} onChange={e => setYear(e.target.value)} style={{ padding: '4px 8px', borderRadius: '2px', border: '1px solid #b3bdc0', background: '#fff', fontSize: '12px' }}>
+                <option value="1st Year">1st Year</option>
+                <option value="2nd Year">2nd Year</option>
+                <option value="3rd Year">3rd Year</option>
+                <option value="4th Year">4th Year</option>
+              </select>
+            </label>
+            <label style={{ fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ font: '10px var(--dp-typography-mono)', color: '#566268' }}>RESIDENCE</span>
+              <select value={residence} onChange={e => setResidence(e.target.value)} style={{ padding: '4px 8px', borderRadius: '2px', border: '1px solid #b3bdc0', background: '#fff', fontSize: '12px' }}>
+                <option value="Hosteller">Hosteller</option>
+                <option value="Day Scholar">Day Scholar</option>
+              </select>
+            </label>
+          </div>
+        )}
+
+        {/* Suggestion Chips */}
+        <div className="ai-suggestions">
+          {quickPrompts.map((p, idx) => (
+            <button
+              key={idx}
+              className="ai-suggestion-chip"
+              onClick={() => handleSend(p.text)}
+              disabled={loading}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Chat message stream */}
+        <div className="ai-chat-stream">
+          {messages.map(msg => (
+            <div key={msg.id} className={`ai-msg ${msg.sender}`}>
+              {msg.sender === 'user' ? (
+                <div className="ai-bubble-user">{msg.text}</div>
+              ) : (
+                <div className="ai-bubble-bot">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className="brand-mark" style={{ width: '20px', height: '20px', fontSize: '9px' }}>CD</span>
+                      <strong style={{ fontSize: '12px', color: '#253137' }}>Dude Campus Assistant</strong>
+                    </div>
+                    <button
+                      className="ai-copy-btn"
+                      onClick={() => handleCopy(msg.id, msg.text)}
+                      title="Copy response"
+                    >
+                      {copiedId === msg.id ? <Check size={12} style={{ color: 'green' }} /> : <Copy size={12} />}
+                      <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+
+                  <div style={{ fontSize: '13px' }}>
+                    {formatAiText(msg.text)}
+                  </div>
+
+                  {msg.sources && msg.sources.length > 0 && (
+                    <div className="ai-sources">
+                      <span style={{ font: '10px var(--dp-typography-mono)', color: '#667479' }}>SOURCES:</span>
+                      {msg.sources.map((src, sIdx) => (
+                        <a key={sIdx} href={src} target="_blank" rel="noopener noreferrer" className="ai-source-tag">
+                          <span>{src.replace(/^https?:\/\/(www\.)?/, '')}</span>
+                          <ExternalLink size={10} />
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div className="ai-msg assistant">
+              <div className="ai-bubble-bot" style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#56646a', font: '12px var(--dp-typography-mono)' }}>
+                <span className="status-light" />
+                <span>Dude is consulting GNDEC website knowledge base...</span>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input Bar */}
+        <form className="ai-input-bar" onSubmit={e => { e.preventDefault(); handleSend(); }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Ask anything about GNDEC rules, exams, hostel, or draft email..."
+            disabled={loading}
+          />
+          <button
+            className="primary-btn"
+            type="submit"
+            disabled={loading || !input.trim()}
+            style={{ minWidth: '44px', padding: '0 16px' }}
+          >
+            <Send size={15} />
+          </button>
+        </form>
+      </div>
+    </Overlay>
+  )
+}
+
 function ProfileModal({ user, onClose, onToast, onSignOut }) { return <Overlay onClose={onClose}><div className="modal-head"><div><div className="eyebrow">05 / ACCOUNT</div><h2>Your profile</h2></div><button className="close-btn plain" onClick={onClose}><X size={19} /></button></div><div className="account-card"><span className="avatar avatar-large">{getInitials(user?.email)}</span><div><h3>{user?.email || 'Your account'}</h3><p>North Campus · Student</p><span className="verified"><ShieldCheck size={14} /> Verified campus account</span></div></div><div className="account-links"><button onClick={() => onToast('Profile settings are ready for your Supabase account')}><CircleUserRound size={17} /> Profile settings <ArrowUpRight size={15} /></button><button onClick={async () => { try { if (isSupabaseConfigured) { const { error } = await supabase.auth.signOut(); if (error) throw error } onSignOut() } catch (error) { onToast(error.message || 'Could not sign out. Please try again.') } }}><LogOut size={17} /> Sign out <ArrowUpRight size={15} /></button></div></Overlay> }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><AuthGate /></BrowserRouter>)
