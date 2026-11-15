@@ -5,9 +5,10 @@ import {
   ArrowUpRight, Bell, Bookmark, BookOpen, Bot, Check, ChevronDown, CircleUserRound,
   Clock3, Copy, ExternalLink, Filter, Heart, ImagePlus, Laptop, LogOut, MapPin, Menu, MessageSquare,
   PackageOpen, Plus, RotateCcw, Search, Send, ShieldCheck, SlidersHorizontal, Sparkles,
-  Tag, X, Zap
+  Tag, Users, X, Zap
 } from 'lucide-react'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
+import CollabsModule from './components/CollabsModule'
 import './styles.css'
 
 const DEFAULT_FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=800&q=80'
@@ -512,9 +513,14 @@ function App({ user, onSignOut }) {
 
   return <div className="app-shell">
     <header className="topbar">
-      <button className="brand" onClick={() => { setActiveView('discover'); setCategory('All items') }}><span className="brand-mark">CX</span><span>Campus<span className="brand-accent">Exchange</span></span></button>
+      <button className="brand" onClick={() => { setActiveView('discover'); setCategory('All items') }}><span className="brand-mark">CD</span><span>Campus<span className="brand-accent">Dude</span></span></button>
       <nav className="desktop-nav">
-        <button className={activeView === 'discover' && !modal ? 'nav-active' : ''} onClick={() => { setActiveView('discover'); setModal(null) }}>Discover</button>
+        <button className={['discover', 'saved'].includes(activeView) && !modal ? 'nav-active' : ''} onClick={() => { setActiveView('discover'); setModal(null) }}>Marketplace</button>
+        <button className={activeView === 'collabs' && !modal ? 'nav-active' : ''} onClick={() => { setActiveView('collabs'); setModal(null) }} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <Users size={14} style={{ color: activeView === 'collabs' ? 'var(--dp-color-accent)' : 'inherit' }} />
+          <span>Collabs</span>
+          <span className="nav-count" style={{ background: '#fcefe9', color: 'var(--dp-color-accent)', fontWeight: 600 }}>8+</span>
+        </button>
         <button className={activeView === 'saved' && !modal ? 'nav-active' : ''} onClick={() => { setActiveView('saved'); setModal(null) }}>Saved <span className="nav-count">{saved.length}</span></button>
         <button className={modal === 'messages' ? 'nav-active' : ''} onClick={() => { setSelectedListing(null); setModal('messages') }}>Messages <span className="nav-dot" /></button>
         <button className={modal === 'ai-assistant' ? 'nav-active' : ''} onClick={() => setModal('ai-assistant')} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
@@ -530,7 +536,10 @@ function App({ user, onSignOut }) {
     </header>
     {menuOpen && (
       <div className="mobile-nav">
-        <button onClick={() => { setActiveView('discover'); setModal(null); setMenuOpen(false) }}>Discover</button>
+        <button onClick={() => { setActiveView('discover'); setModal(null); setMenuOpen(false) }}>Marketplace</button>
+        <button onClick={() => { setActiveView('collabs'); setModal(null); setMenuOpen(false) }} style={{ color: 'var(--dp-color-accent)', fontWeight: 600 }}>
+          👥 Collabs (Student Community)
+        </button>
         <button onClick={() => { setActiveView('saved'); setModal(null); setMenuOpen(false) }}>Saved ({saved.length})</button>
         <button onClick={() => { setSelectedListing(null); setModal('messages'); setMenuOpen(false) }}>Messages</button>
         <button onClick={() => { setModal('ai-assistant'); setMenuOpen(false) }} style={{ color: 'var(--dp-color-accent)', fontWeight: 600 }}>
@@ -540,24 +549,30 @@ function App({ user, onSignOut }) {
     )}
 
     <main>
-      <section className="hero">
-        <div><div className="eyebrow"><span className="status-light" /> LIVE NETWORK / NORTH CAMPUS</div><h1>Find useful things.<br /><em>Keep them moving.</em></h1><p>A trusted marketplace for your campus community. Buy, sell, and exchange what you need — nearby.</p></div>
-      </section>
+      {activeView === 'collabs' ? (
+        <CollabsModule user={user} onToast={setToast} />
+      ) : (
+        <>
+          <section className="hero">
+            <div><div className="eyebrow"><span className="status-light" /> LIVE NETWORK / NORTH CAMPUS</div><h1>Find useful things.<br /><em>Keep them moving.</em></h1><p>A trusted marketplace for your campus community. Buy, sell, and exchange what you need — nearby.</p></div>
+          </section>
 
-      <section className="workspace">
-        <aside className="sidebar">
-          <div className="section-kicker">01 / EXPLORE</div>
-          <div className="category-list">{categories.map((item, index) => <button key={item} className={category === item && activeView !== 'saved' ? 'category-active' : ''} onClick={() => { setCategory(item); setActiveView('discover') }}><span className="category-icon">{index === 0 ? <Sparkles size={15} /> : index === 1 ? <BookOpen size={15} /> : index === 2 ? <Laptop size={15} /> : index === 3 ? <PackageOpen size={15} /> : index === 4 ? <Tag size={15} /> : <Zap size={15} />}</span>{item}<span className="category-arrow">↗</span></button>)}</div>
-          <div className="sidebar-note"><ShieldCheck size={17} /><div><strong>Campus verified</strong><span>Everyone here has a .edu account.</span></div></div>
-        </aside>
-        <div className="catalog">
-          <div className="catalog-head"><div><div className="section-kicker">02 / {activeView === 'saved' ? 'YOUR SHORTLIST' : 'THE EXCHANGE'}</div><h2>{activeView === 'saved' ? 'Saved for later' : category === 'All items' ? 'Fresh on campus' : category}</h2></div><button className="primary-btn" onClick={() => setModal('create')}><Plus size={17} /> List an item</button></div>
-          <div className="control-bar"><div className="search-box"><Search size={18} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search books, calculators, furniture..." /><kbd>⌘ K</kbd></div><button className={`filter-btn ${filtersOpen ? 'filter-active' : ''}`} onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={16} /> Filters <span className="filter-count">{[condition !== 'All conditions', listingType !== 'All types'].filter(Boolean).length || ''}</span></button></div>
-          {filtersOpen && <div className="filters-panel"><label>Condition<select value={condition} onChange={event => setCondition(event.target.value)}><option>All conditions</option><option>Like new</option><option>Good</option></select></label><label>Listing type<select value={listingType} onChange={event => setListingType(event.target.value)}><option>All types</option><option>Sale</option><option>Exchange</option></select></label><button onClick={() => { setCondition('All conditions'); setListingType('All types') }}>Reset</button></div>}
-          <div className="result-row"><span>{visibleListings.length} ITEMS IN YOUR AREA</span><button>Recently added <ChevronDown size={13} /></button></div>
-          {visibleListings.length ? <div className="listing-grid">{visibleListings.map(item => <article className="listing-card" key={item.id} onClick={() => setSelected(item)}><div className={`listing-image ${item.accent}`}><img src={getProductImageUrl(item)} alt={item.title || 'Product listing'} loading="lazy" onError={handleImageError} /><span className="type-tag">{item.type === 'Exchange' ? '↔ EXCHANGE' : '● FOR SALE'}</span><button className={`save-btn ${saved.includes(item.id) ? 'is-saved' : ''}`} onClick={event => { event.stopPropagation(); toggleSaved(item.id) }} aria-label="Save listing"><Heart size={17} fill={saved.includes(item.id) ? 'currentColor' : 'none'} /></button></div><div className="listing-info"><div className="listing-category">{item.category} <span>• {item.condition}</span></div><h3>{item.title}</h3><div className="listing-bottom"><strong>₹{item.price.toLocaleString('en-IN')}</strong><span><MapPin size={12} />{item.campus}</span></div><div className="seller-row"><span className="avatar">{item.initials}</span><span>{item.seller}</span><span className="posted">{item.posted}</span></div></div></article>)}</div> : <div className="empty-state"><Bookmark size={29} /><h3>{activeView === 'saved' ? 'Your shortlist is empty' : 'Nothing matches that search'}</h3><p>{activeView === 'saved' ? 'Tap the heart on an item to keep it here.' : 'Try a different keyword or reset your filters.'}</p></div>}
-        </div>
-      </section>
+          <section className="workspace">
+            <aside className="sidebar">
+              <div className="section-kicker">01 / EXPLORE</div>
+              <div className="category-list">{categories.map((item, index) => <button key={item} className={category === item && activeView !== 'saved' ? 'category-active' : ''} onClick={() => { setCategory(item); setActiveView('discover') }}><span className="category-icon">{index === 0 ? <Sparkles size={15} /> : index === 1 ? <BookOpen size={15} /> : index === 2 ? <Laptop size={15} /> : index === 3 ? <PackageOpen size={15} /> : index === 4 ? <Tag size={15} /> : <Zap size={15} />}</span>{item}<span className="category-arrow">↗</span></button>)}</div>
+              <div className="sidebar-note"><ShieldCheck size={17} /><div><strong>Campus verified</strong><span>Everyone here has a .edu account.</span></div></div>
+            </aside>
+            <div className="catalog">
+              <div className="catalog-head"><div><div className="section-kicker">02 / {activeView === 'saved' ? 'YOUR SHORTLIST' : 'THE EXCHANGE'}</div><h2>{activeView === 'saved' ? 'Saved for later' : category === 'All items' ? 'Fresh on campus' : category}</h2></div><button className="primary-btn" onClick={() => setModal('create')}><Plus size={17} /> List an item</button></div>
+              <div className="control-bar"><div className="search-box"><Search size={18} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search books, calculators, furniture..." /><kbd>⌘ K</kbd></div><button className={`filter-btn ${filtersOpen ? 'filter-active' : ''}`} onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={16} /> Filters <span className="filter-count">{[condition !== 'All conditions', listingType !== 'All types'].filter(Boolean).length || ''}</span></button></div>
+              {filtersOpen && <div className="filters-panel"><label>Condition<select value={condition} onChange={event => setCondition(event.target.value)}><option>All conditions</option><option>Like new</option><option>Good</option></select></label><label>Listing type<select value={listingType} onChange={event => setListingType(event.target.value)}><option>All types</option><option>Sale</option><option>Exchange</option></select></label><button onClick={() => { setCondition('All conditions'); setListingType('All types') }}>Reset</button></div>}
+              <div className="result-row"><span>{visibleListings.length} ITEMS IN YOUR AREA</span><button>Recently added <ChevronDown size={13} /></button></div>
+              {visibleListings.length ? <div className="listing-grid">{visibleListings.map(item => <article className="listing-card" key={item.id} onClick={() => setSelected(item)}><div className={`listing-image ${item.accent}`}><img src={getProductImageUrl(item)} alt={item.title || 'Product listing'} loading="lazy" onError={handleImageError} /><span className="type-tag">{item.type === 'Exchange' ? '↔ EXCHANGE' : '● FOR SALE'}</span><button className={`save-btn ${saved.includes(item.id) ? 'is-saved' : ''}`} onClick={event => { event.stopPropagation(); toggleSaved(item.id) }} aria-label="Save listing"><Heart size={17} fill={saved.includes(item.id) ? 'currentColor' : 'none'} /></button></div><div className="listing-info"><div className="listing-category">{item.category} <span>• {item.condition}</span></div><h3>{item.title}</h3><div className="listing-bottom"><strong>₹{item.price.toLocaleString('en-IN')}</strong><span><MapPin size={12} />{item.campus}</span></div><div className="seller-row"><span className="avatar">{item.initials}</span><span>{item.seller}</span><span className="posted">{item.posted}</span></div></div></article>)}</div> : <div className="empty-state"><Bookmark size={29} /><h3>{activeView === 'saved' ? 'Your shortlist is empty' : 'Nothing matches that search'}</h3><p>{activeView === 'saved' ? 'Tap the heart on an item to keep it here.' : 'Try a different keyword or reset your filters.'}</p></div>}
+            </div>
+          </section>
+        </>
+      )}
     </main>
     <footer><span>© 2025 CAMPUS EXCHANGE / BUILT FOR STUDENTS</span><span><a href="#safety">SAFETY CENTRE</a><a href="#rules">COMMUNITY RULES</a></span></footer>
     {selected && (
